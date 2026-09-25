@@ -1,50 +1,56 @@
 # Roodie Worker Access
 
-Roodie now uses a two-stage worker access flow.
+Roodie now uses an automatic **Gmail -> linked Roodie code** flow.
 
-1. The worker signs in with Google.
-2. Google/Supabase verifies the Google account and gives Roodie the verified email/session.
-3. The worker enters the separate Roodie worker PIN supplied by the administrator.
-4. The PIN request appears in Supabase as Pending.
-5. The administrator reviews the request in Supabase and changes its status to Approved, Rejected, or Blocked.
-6. The worker taps Check approval using the same Roodie PIN.
-7. If the request is Approved, the Roodie page shows Access approved.
+## Worker flow
 
-## Where to approve workers
+1. The administrator links a worker Gmail to a Roodie code in Supabase.
+2. The worker opens Roodie and taps **Continue with Google**.
+3. Google/Supabase verifies the Gmail address.
+4. Roodie automatically finds the Roodie code already linked to that Gmail.
+5. The worker does **not** type the code.
+6. Supabase creates an access request containing the verified Gmail + linked Roodie code.
+7. The administrator changes the request from **Pending** to **Approved**, **Rejected**, or **Blocked**.
+8. The worker can tap **Check approval**.
 
-Open the Roodie Supabase project and go to:
+## Link a Gmail to a code
 
-Table Editor -> roodie_access_requests
+In the Roodie Supabase SQL Editor, run:
 
-A new request contains:
+```sql
+select private.admin_set_roodie_email_code(
+  'worker@example.com',
+  'ROODIE-001'
+);
+```
 
-- worker_email — the Google-authenticated email.
-- submitted_pin — the Roodie PIN while the request is still Pending.
-- status — defaults to Pending.
-- requested_at — when the request was submitted.
+You can also review the mappings in:
 
-To allow the worker, change status from Pending to Approved.
+**Table Editor -> roodie_email_codes**
 
-The database trigger then automatically removes the visible PIN and stores only a bcrypt hash. The administrator can see the Roodie PIN while reviewing the Pending request, but the plaintext PIN is not retained after the decision.
+The important columns are:
 
-## Shared Google account
+- `worker_email`
+- `worker_code`
+- `status`
 
-Multiple workers can use the same Google account if that is how the company operates. Give each worker a different Roodie PIN. The PIN becomes the worker-specific access identifier.
+## Where the sign-in appears
 
-If two workers use the same Google account and the same Roodie PIN, Roodie cannot distinguish them as separate workers.
+After the worker signs in with Google, open:
 
-## Google password
+**Table Editor -> roodie_access_requests**
 
-Roodie does not receive or store the Gmail/Google password, Google OTP, recovery code, or 2-step-verification code. Google handles those credentials directly.
+You will see:
 
-## Supabase setup
+- `worker_email` — verified by Google
+- `linked_code` — automatically looked up from `roodie_email_codes`
+- `status` — Pending / Approved / Rejected / Blocked
+- `requested_at`
 
-The live Roodie project is configured for this approval flow. For a fresh project:
+The worker never has to type the Roodie code.
 
-1. Run supabase-setup.sql.
-2. Enable Google under Supabase Authentication providers.
-3. Configure the Google OAuth client and Supabase callback URL.
-4. Add the deployed GitHub Pages URL to the allowed redirect URLs.
-5. Keep only the public Supabase URL and publishable key in config.js.
+## Important
 
-Never put a Google client secret or Supabase service-role key in the public repository.
+The linked Roodie code is an application/workforce code managed by Roodie. It is not a Google password, Google OTP, recovery code, or Google verification code.
+
+If multiple people use the exact same Google account, Google presents them to Roodie as the same identity, so that Gmail can only resolve to the same linked Roodie code unless the system is later changed to use another worker identifier.
