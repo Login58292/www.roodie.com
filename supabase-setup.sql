@@ -1,217 +1,204 @@
--- Roodie worker roster + verified Google sign-in
--- Run this in a SEPARATE Supabase project dedicated to Roodie.
--- Google Auth must be enabled in Supabase before the web flow can sign workers in.
+-- Roodie: Google sign-in + administrator-approved worker PIN flow
+-- Google authentication supplies only the verified email/session.
+-- The Roodie PIN is a separate app credential entered by the worker.
 
 create extension if not exists pgcrypto;
 
-create table if not exists public.roodie_workers (
+create table if not exists public.roodie_access_requests (
   id uuid primary key default gen_random_uuid(),
-  worker_email text not null unique,
-  access_code_hash text not null,
-  invite_token_hash text not null unique,
-  status text not null default 'Active'
-    check (status in ('Active','Blocked')),
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.roodie_worker_visits (
-  id uuid primary key default gen_random_uuid(),
-  worker_id uuid not null references public.roodie_workers(id) on delete cascade,
+  auth_user_id uuid not null,
   worker_email text not null,
-  visited_at timestamptz not null default now()
+  submitted_pin text,
+  pin_hash text,
+  status text not null default 'Pending'
+    check (status in ('Pending','Approved','Rejected','Blocked')),
+  requested_at timestamptz not null default now(),
+  reviewed_at timestamptz,
+  last_checked_at timestamptz
 );
 
-create table if not exists public.roodie_worker_logins (
-  id uuid primary key default gen_random_uuid(),
-  worker_id uuid references public.roodie_workers(id) on delete set null,
-  worker_email text not null,
-  success boolean not null,
-  attempted_at timestamptz not null default now()
-);
+create index if not exists roodie_access_requests_email_idx
+  on public.roodie_access_requests(worker_email);
 
-alter table public.roodie_workers enable row level security;
-alter table public.roodie_worker_visits enable row level security;
-alter table public.roodie_worker_logins enable row level security;
+create index if not exists roodie_access_requests_status_idx
+  on public.roodie_access_requests(status);
 
--- No direct browser access to roster or logs.
-revoke all on table public.roodie_workers from anon, authenticated;
-revoke all on table public.roodie_worker_visits from anon, authenticated;
-revoke all on table public.roodie_worker_logins from anon, authenticated;
+alter table public.roodie_access_requests enable row level security;
+revoke all on table public.roodie_access_requests from anon, authenticated;
 
--- Admin helper lives in a non-exposed schema.
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
 
--- Run only from Supabase SQL Editor / trusted admin context.
--- Use a different long random invite token for every worker.
-create or replace function private.admin_add_roodie_worker(
-  p_email text,
-  p_access_code text,
-  p_invite_token text
-)
-returns uuid
+create or replace function private.finalize_roodie_pin_review()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+begin
+  if old.status = 'Pending' and new.status <> 'Pending' then
+    if old.submitted_pin is not null and old.submitted_pin <> '' then
+      new.pin_hash := crypt(old.submitted_pin, gen_salt('bf'));
+    end if;
+    new.submitted_pin := null;
+    new.reviewed_at := now();
+  elsif old.status <> 'Pending' and new.status = 'Pending' then
+    raise exception 'Reviewed requests cannot be returned to Pending because the visible PIN has already been cleared';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists roodie_finalize_pin_review on public.roodie_access_requests;
+create trigger roodie_finalize_pin_review
+before update of status on public.roodie_access_requests
+for each row
+execute function private.finalize_roodie_pin_review();
+
+create or replace function public.submit_roodie_pin(p_pin text)
+returns jsonb
 language plpgsql
 security definer
 set search_path = public, extensions
 as $$
 declare
-  v_email text := lower(trim(p_email));
-  v_worker_id uuid;
+  v_uid uuid := auth.uid();
+  v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
+  v_pin text := trim(coalesce(p_pin, ''));
+  v_request public.roodie_access_requests%rowtype;
 begin
-  if v_email is null or v_email = '' or position('@' in v_email) < 2 then
-    raise exception 'Invalid worker email';
+  if v_uid is null or v_email = '' then
+    return jsonb_build_object('ok', false, 'status', 'Unauthenticated');
   end if;
 
-  if p_access_code is null or length(p_access_code) < 6 then
-    raise exception 'Roodie access code must be at least 6 characters';
+  if length(v_pin) < 4 or length(v_pin) > 32 then
+    return jsonb_build_object('ok', false, 'status', 'Invalid', 'message', 'PIN must be 4 to 32 characters.');
   end if;
 
-  if p_invite_token is null or length(p_invite_token) < 24 then
-    raise exception 'Invite token must be at least 24 characters';
+  select *
+  into v_request
+  from public.roodie_access_requests
+  where worker_email = v_email
+    and status = 'Pending'
+    and submitted_pin = v_pin
+  order by requested_at desc
+  limit 1;
+
+  if v_request.id is not null then
+    update public.roodie_access_requests
+    set last_checked_at = now()
+    where id = v_request.id;
+
+    return jsonb_build_object('ok', false, 'status', 'Pending', 'request_id', v_request.id);
   end if;
 
-  insert into public.roodie_workers(
+  for v_request in
+    select *
+    from public.roodie_access_requests
+    where worker_email = v_email
+      and status <> 'Pending'
+      and pin_hash is not null
+    order by requested_at desc
+  loop
+    if crypt(v_pin, v_request.pin_hash) = v_request.pin_hash then
+      update public.roodie_access_requests
+      set last_checked_at = now()
+      where id = v_request.id;
+
+      return jsonb_build_object(
+        'ok', v_request.status = 'Approved',
+        'status', v_request.status,
+        'request_id', v_request.id
+      );
+    end if;
+  end loop;
+
+  insert into public.roodie_access_requests(
+    auth_user_id,
     worker_email,
-    access_code_hash,
-    invite_token_hash,
+    submitted_pin,
     status
   )
   values(
+    v_uid,
     v_email,
-    crypt(p_access_code, gen_salt('bf')),
-    encode(digest(p_invite_token, 'sha256'), 'hex'),
-    'Active'
+    v_pin,
+    'Pending'
   )
-  on conflict (worker_email)
-  do update set
-    access_code_hash = excluded.access_code_hash,
-    invite_token_hash = excluded.invite_token_hash,
-    status = 'Active'
-  returning id into v_worker_id;
+  returning * into v_request;
 
-  return v_worker_id;
+  return jsonb_build_object('ok', false, 'status', 'Pending', 'request_id', v_request.id);
 end;
 $$;
 
--- Called only after a worker has authenticated with Google.
--- The invite token must belong to the same worker email Google verified.
-create or replace function public.register_roodie_visit(
-  p_invite_token text
-)
+create or replace function public.check_roodie_pin(p_pin text)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public, extensions
 as $$
 declare
+  v_uid uuid := auth.uid();
   v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
-  v_worker public.roodie_workers%rowtype;
+  v_pin text := trim(coalesce(p_pin, ''));
+  v_request public.roodie_access_requests%rowtype;
 begin
-  if auth.uid() is null or v_email = '' then
-    return jsonb_build_object('ok', false);
-  end if;
-
-  if p_invite_token is null or p_invite_token = '' then
-    return jsonb_build_object('ok', false);
+  if v_uid is null or v_email = '' then
+    return jsonb_build_object('ok', false, 'status', 'Unauthenticated');
   end if;
 
   select *
-  into v_worker
-  from public.roodie_workers
+  into v_request
+  from public.roodie_access_requests
   where worker_email = v_email
-    and invite_token_hash = encode(digest(p_invite_token, 'sha256'), 'hex')
-    and status = 'Active'
+    and status = 'Pending'
+    and submitted_pin = v_pin
+  order by requested_at desc
   limit 1;
 
-  if v_worker.id is null then
-    return jsonb_build_object('ok', false);
+  if v_request.id is not null then
+    update public.roodie_access_requests
+    set last_checked_at = now()
+    where id = v_request.id;
+
+    return jsonb_build_object('ok', false, 'status', 'Pending');
   end if;
 
-  insert into public.roodie_worker_visits(worker_id, worker_email)
-  values(v_worker.id, v_email);
+  for v_request in
+    select *
+    from public.roodie_access_requests
+    where worker_email = v_email
+      and status <> 'Pending'
+      and pin_hash is not null
+    order by requested_at desc
+  loop
+    if crypt(v_pin, v_request.pin_hash) = v_request.pin_hash then
+      update public.roodie_access_requests
+      set last_checked_at = now()
+      where id = v_request.id;
 
-  return jsonb_build_object('ok', true);
-end;
-$$;
-
--- Verify the Roodie-issued code against the email from the authenticated
--- Google/Supabase session. The client is not allowed to supply an email.
-drop function if exists public.register_roodie_worker(text, text);
-
-create or replace function public.register_roodie_worker(
-  p_access_code text,
-  p_invite_token text default null
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
-declare
-  v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
-  v_worker public.roodie_workers%rowtype;
-  v_ok boolean := false;
-begin
-  if auth.uid() is null or v_email = '' then
-    return jsonb_build_object('ok', false);
-  end if;
-
-  select *
-  into v_worker
-  from public.roodie_workers
-  where worker_email = v_email
-    and status = 'Active'
-  limit 1;
-
-  if v_worker.id is not null and p_access_code is not null then
-    v_ok := crypt(p_access_code, v_worker.access_code_hash) = v_worker.access_code_hash;
-
-    -- If a personalized invite link is present, it must belong to this worker.
-    if v_ok and p_invite_token is not null and p_invite_token <> '' then
-      v_ok := v_worker.invite_token_hash =
-        encode(digest(p_invite_token, 'sha256'), 'hex');
+      return jsonb_build_object(
+        'ok', v_request.status = 'Approved',
+        'status', v_request.status
+      );
     end if;
-  end if;
+  end loop;
 
-  insert into public.roodie_worker_logins(worker_id, worker_email, success)
-  values(v_worker.id, v_email, v_ok);
-
-  if v_ok then
-    return jsonb_build_object('ok', true, 'worker_email', v_email);
-  end if;
-
-  return jsonb_build_object('ok', false);
+  return jsonb_build_object('ok', false, 'status', 'NotFound');
 end;
 $$;
 
--- PostgreSQL grants EXECUTE to PUBLIC on new functions by default.
--- Remove that and allow only the intended caller.
-revoke all on function private.admin_add_roodie_worker(text,text,text) from public, anon, authenticated;
-grant execute on function private.admin_add_roodie_worker(text,text,text) to service_role;
+revoke all on function private.finalize_roodie_pin_review() from public, anon, authenticated;
 
-revoke all on function public.register_roodie_visit(text) from public, anon, authenticated;
-revoke all on function public.register_roodie_worker(text,text) from public, anon, authenticated;
+revoke all on function public.submit_roodie_pin(text) from public, anon, authenticated;
+grant execute on function public.submit_roodie_pin(text) to authenticated;
 
-grant execute on function public.register_roodie_visit(text) to authenticated;
-grant execute on function public.register_roodie_worker(text,text) to authenticated;
+revoke all on function public.check_roodie_pin(text) from public, anon, authenticated;
+grant execute on function public.check_roodie_pin(text) to authenticated;
 
--- Example provisioning:
---
--- select private.admin_add_roodie_worker(
---   'worker1@gmail.com',
---   'ROODIE-CODE-001',
---   'A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1'
--- );
---
--- Personalized worker link:
--- https://YOUR-ROODIE-SITE/?invite=A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1
---
--- Flow:
--- 1. Worker opens Roodie.
--- 2. Worker chooses/approves a Google account.
--- 3. Google/Supabase provides the verified email to Roodie.
--- 4. Worker enters only the Roodie-issued access code.
--- 5. This function checks that verified email + Roodie code match the roster.
---
--- Roodie never requests or stores Gmail passwords, Google OTPs,
--- backup codes, or 2-step-verification codes.
+-- ADMIN APPROVAL:
+-- Supabase Dashboard -> Table Editor -> roodie_access_requests
+-- Change a Pending row's status to Approved.
+-- While Pending, submitted_pin is visible to the database administrator.
+-- After review, the trigger clears submitted_pin and retains only a bcrypt hash.
