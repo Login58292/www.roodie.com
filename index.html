@@ -49,9 +49,9 @@
           <span class="dot">👤</span>
           <span id="verifiedEmail" class="email"></span>
         </button>
-        <p>Enter the Roodie worker access code issued by your company.</p>
-        <input id="accessCode" class="input" type="password" autocomplete="new-password" placeholder="Roodie access code" minlength="6" required>
-        <div class="hint">This must be a Roodie code — never enter a Google/Gmail verification code here.</div>
+        <p>Enter the Roodie worker passcode linked to this verified email.</p>
+        <input id="accessCode" class="input" type="password" autocomplete="new-password" placeholder="Roodie worker passcode" minlength="6" required>
+        <div class="hint">Roodie checks this passcode only against the verified Google email shown above. Never enter a Google/Gmail verification code here.</div>
         <div id="message" class="message" aria-live="polite"></div>
         <div class="actions"><button id="submitButton" type="submit">Verify worker</button></div>
       </form>
@@ -170,10 +170,10 @@
         if(error) throw error;
 
         if(data && data.ok){
-          show(message,"success","Roodie access confirmed for "+(data.worker_email || currentSession.user.email)+".");
+          show(message,"success","Roodie worker passcode confirmed for "+(data.worker_email || currentSession.user.email)+".");
           codeInput.value="";
         }else{
-          show(message,"error","This Google account and Roodie access code are not authorized.");
+          show(message,"error","This Google account and Roodie worker passcode are not authorized.");
         }
       }catch(_err){
         show(message,"error","Could not verify access. Please try again.");
