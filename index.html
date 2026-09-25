@@ -3,7 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1a73e8">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>Roodie Worker Access</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <style>
     *{box-sizing:border-box}
     body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#202124}
@@ -18,15 +22,17 @@
     button:disabled{opacity:.55;cursor:default}
     .google{width:100%;height:48px;border:1px solid #dadce0;border-radius:24px;background:#fff;color:#202124;display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px}
     .google-mark{font-size:19px;font-weight:700;color:#4285f4}
+    .install{width:100%;margin-top:12px;background:#0f766e}
     .recovery{display:block;margin-top:16px;text-align:center;color:#1a73e8;text-decoration:none;font-size:14px;font-weight:600}
     .recovery:hover{text-decoration:underline}
     .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden;background:#fff;color:#202124;min-height:0}
     .account .dot{width:28px;height:28px;border-radius:50%;background:#e8eaed;display:grid;place-items:center;flex:0 0 auto}
     .account .email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .safe{margin-top:28px;padding:14px 16px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;line-height:1.5}
+    .install-id{font-size:12px;color:#64748b;word-break:break-all;margin-top:10px}
     .message{margin-top:16px;font-size:14px;min-height:20px;line-height:1.45}
     .message.error{color:#b91c1c}.message.pending{color:#92400e}.message.success{color:#047857}
-    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}
+    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px;flex-wrap:wrap}
     .secondary{background:#fff;color:#1a73e8;border:1px solid #dadce0}
     .approved{padding:18px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:12px;color:#166534;line-height:1.55}
     @media(max-width:640px){.page{padding-top:62px}.card{max-width:100%}h1{font-size:30px}}
@@ -38,21 +44,23 @@
       <div class="brand" aria-label="Roodie"><span>R</span><span>o</span><span>o</span><span>d</span><span>i</span><span>e</span></div>
 
       <div id="googleStep" class="step active">
-        <h1>Worker sign in</h1>
-        <p>Continue with Google. Roodie will automatically record the verified Gmail and that Google account's unique ID.</p>
+        <h1>Worker verification</h1>
+        <p>Install Roodie, then continue with Google. Each installation is approved separately by the administrator.</p>
         <button id="googleButton" class="google" type="button"><span class="google-mark">G</span> Continue with Google</button>
+        <button id="installButton" class="install" type="button" hidden>Install Roodie app</button>
         <a class="recovery" href="https://accounts.google.com/signin/recovery" target="_blank" rel="noopener noreferrer">Forgot Gmail password?</a>
-        <div class="safe"><strong>How it works:</strong> after Google verifies the account, Roodie sends the verified Gmail and Google account ID to the administrator for approval. If a worker forgot the Gmail password, use the recovery link above; Google handles the reset securely.</div>
+        <div class="safe"><strong>Verification:</strong> Roodie records the Google-verified Gmail, Google's account identifier, and a Roodie installation ID for this browser/app installation. It does not read Gmail passwords, OTPs, recovery codes, SMS, browser cookies, or other private credentials.</div>
         <div id="googleMessage" class="message" aria-live="polite"></div>
       </div>
 
       <div id="requestStep" class="step">
-        <h1>Access request</h1>
+        <h1>Device approval</h1>
         <button id="changeAccount" class="account" type="button" title="Use another Google account">
           <span class="dot">👤</span>
           <span id="verifiedEmail" class="email"></span>
         </button>
-        <p id="requestText">Recording your verified Google identity…</p>
+        <p id="requestText">Registering this Roodie installation…</p>
+        <div id="installIdText" class="install-id"></div>
         <div id="message" class="message" aria-live="polite"></div>
         <div class="actions">
           <button id="changeAccount2" class="secondary" type="button">Change account</button>
@@ -62,7 +70,7 @@
 
       <div id="approvedStep" class="step">
         <h1>Access approved</h1>
-        <div class="approved">Your Google account has been approved. You now have access.</div>
+        <div class="approved">This Google account and this Roodie installation are approved. You now have access.</div>
       </div>
     </section>
   </main>
@@ -74,22 +82,47 @@
     const requestStep=document.getElementById("requestStep");
     const approvedStep=document.getElementById("approvedStep");
     const googleButton=document.getElementById("googleButton");
+    const installButton=document.getElementById("installButton");
     const googleMessage=document.getElementById("googleMessage");
     const verifiedEmail=document.getElementById("verifiedEmail");
     const changeAccount=document.getElementById("changeAccount");
     const changeAccount2=document.getElementById("changeAccount2");
     const checkButton=document.getElementById("checkButton");
     const requestText=document.getElementById("requestText");
+    const installIdText=document.getElementById("installIdText");
     const message=document.getElementById("message");
 
+    const INSTALL_KEY="roodie_install_id_v1";
     let client=null;
     let currentSession=null;
     let registering=false;
+    let deferredInstallPrompt=null;
 
     function show(el,type,text){
       el.className="message"+(type?" "+type:"");
       el.textContent=text||"";
     }
+
+    function createInstallId(){
+      if(window.crypto && typeof window.crypto.randomUUID==="function"){
+        return "ri_"+window.crypto.randomUUID();
+      }
+      const bytes=new Uint8Array(24);
+      window.crypto.getRandomValues(bytes);
+      return "ri_"+Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");
+    }
+
+    function getInstallId(){
+      let id=localStorage.getItem(INSTALL_KEY);
+      if(!id){
+        id=createInstallId();
+        localStorage.setItem(INSTALL_KEY,id);
+      }
+      return id;
+    }
+
+    const installId=getInstallId();
+    installIdText.textContent="Roodie installation ID: "+installId;
 
     function initClient(){
       if(!window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY){
@@ -97,6 +130,7 @@
         googleButton.disabled=true;
         return false;
       }
+
       client=window.supabase.createClient(
         ROODIE_CONFIG.SUPABASE_URL,
         ROODIE_CONFIG.SUPABASE_ANON_KEY,
@@ -109,6 +143,7 @@
       googleStep.classList.remove("active");
       requestStep.classList.remove("active");
       approvedStep.classList.add("active");
+
       if(window.ROODIE_CONFIG && ROODIE_CONFIG.APPROVED_REDIRECT_URL){
         setTimeout(()=>{window.location.href=ROODIE_CONFIG.APPROVED_REDIRECT_URL;},700);
       }
@@ -123,26 +158,32 @@
       }
 
       if(status==="Pending"){
-        requestText.textContent="Your verified Gmail and Google account ID have been sent to the administrator.";
-        show(message,"pending","Approval is pending. Tap Check approval after the administrator approves the request in Supabase.");
+        requestText.textContent="Your verified Gmail and this Roodie installation were sent to the administrator.";
+        show(message,"pending","This installation is pending approval. After the administrator approves it in Supabase, tap Check approval.");
         checkButton.disabled=false;
         return;
       }
 
       if(status==="Rejected"){
-        show(message,"error","This access request was rejected by the administrator.");
+        show(message,"error","This Roodie installation was rejected by the administrator.");
         checkButton.disabled=false;
         return;
       }
 
       if(status==="Blocked"){
-        show(message,"error","This Google account is blocked. Contact the administrator.");
+        show(message,"error","This Roodie installation is blocked. Contact the administrator.");
         checkButton.disabled=false;
         return;
       }
 
       if(status==="NoGoogleIdentity"){
-        show(message,"error","Roodie could not read the Google account identity. Sign out and try Google sign-in again.");
+        show(message,"error","Roodie could not verify the Google identity. Change account and sign in again.");
+        checkButton.disabled=true;
+        return;
+      }
+
+      if(status==="InvalidInstall"){
+        show(message,"error","This Roodie installation ID is invalid. Clear this site's storage and reinstall Roodie.");
         checkButton.disabled=true;
         return;
       }
@@ -153,7 +194,13 @@
         return;
       }
 
-      show(message,"error","Could not process the Roodie access request.");
+      if(status==="NotFound"){
+        show(message,"error","This installation has no access request yet. Sign in again.");
+        checkButton.disabled=false;
+        return;
+      }
+
+      show(message,"error","Could not process this Roodie installation.");
       checkButton.disabled=false;
     }
 
@@ -161,15 +208,15 @@
       if(!client || !currentSession || registering) return;
       registering=true;
       checkButton.disabled=true;
-      requestText.textContent="Recording your verified Gmail and Google account ID…";
+      requestText.textContent="Registering this Roodie installation…";
       show(message,"","");
 
       try{
-        const {data,error}=await client.rpc("register_roodie_google_signin");
+        const {data,error}=await client.rpc("register_roodie_installation",{p_install_id:installId});
         if(error) throw error;
         handleStatus(data);
       }catch(_err){
-        show(message,"error","Could not send the access request. Please try again.");
+        show(message,"error","Could not register this installation. Please try again.");
         checkButton.disabled=false;
       }finally{
         registering=false;
@@ -231,7 +278,7 @@
       show(message,"","Checking approval…");
 
       try{
-        const {data,error}=await client.rpc("check_roodie_google_signin");
+        const {data,error}=await client.rpc("check_roodie_installation",{p_install_id:installId});
         if(error) throw error;
         handleStatus(data);
       }catch(_err){
@@ -240,7 +287,32 @@
       }
     });
 
+    window.addEventListener("beforeinstallprompt",event=>{
+      event.preventDefault();
+      deferredInstallPrompt=event;
+      installButton.hidden=false;
+    });
+
+    installButton.addEventListener("click",async()=>{
+      if(!deferredInstallPrompt) return;
+      installButton.disabled=true;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt=null;
+      installButton.hidden=true;
+      installButton.disabled=false;
+    });
+
+    window.addEventListener("appinstalled",()=>{
+      deferredInstallPrompt=null;
+      installButton.hidden=true;
+    });
+
     async function boot(){
+      if("serviceWorker" in navigator){
+        try{ await navigator.serviceWorker.register("./sw.js"); }catch(_err){}
+      }
+
       if(!initClient()) return;
 
       const {data,error}=await client.auth.getSession();
