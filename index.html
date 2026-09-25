@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roodie Worker Access</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#202124}
+    .page{min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:54px 22px}
+    .card{width:100%;max-width:430px}
+    .brand{font-size:30px;font-weight:700;letter-spacing:-1px;margin-bottom:22px}
+    .brand span:nth-child(1){color:#2563eb}.brand span:nth-child(2){color:#ef4444}.brand span:nth-child(3){color:#f59e0b}.brand span:nth-child(4){color:#2563eb}.brand span:nth-child(5){color:#10b981}.brand span:nth-child(6){color:#ef4444}
+    h1{font-size:32px;line-height:1.15;font-weight:400;margin:0 0 14px}
+    p{font-size:15px;line-height:1.55;color:#5f6368;margin:0 0 26px}
+    .step{display:none}.step.active{display:block}
+    .input{width:100%;height:54px;border:1px solid #dadce0;border-radius:6px;padding:0 14px;font-size:16px;outline:none}
+    .input:focus{border:2px solid #1a73e8;padding:0 13px}
+    .actions{display:flex;justify-content:flex-end;align-items:center;margin-top:28px}
+    button{border:0;border-radius:20px;background:#1a73e8;color:white;height:40px;padding:0 22px;font-size:14px;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.55;cursor:default}
+    .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden}
+    .account .dot{width:28px;height:28px;border-radius:50%;background:#e8eaed;display:grid;place-items:center;flex:0 0 auto}
+    .account .email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .hint{font-size:13px;color:#6b7280;margin-top:12px}
+    .safe{margin-top:28px;padding:14px 16px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;line-height:1.5}
+    .message{margin-top:16px;font-size:14px;min-height:20px}
+    .message.error{color:#b91c1c}.message.success{color:#047857}
+    .small-link{background:none;color:#1a73e8;padding:0;height:auto;font-weight:500}
+    @media(max-width:640px){.page{padding-top:62px}.card{max-width:100%}h1{font-size:30px}}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <div class="brand" aria-label="Roodie"><span>R</span><span>o</span><span>o</span><span>d</span><span>i</span><span>e</span></div>
+
+      <div id="emailStep" class="step active">
+        <h1>Worker sign in</h1>
+        <p>Enter the Gmail or email address you use for your Roodie worker account.</p>
+        <input id="email" class="input" type="email" inputmode="email" autocomplete="email" placeholder="Email or Gmail address" required>
+        <div class="actions"><button id="emailNext" type="button">Next</button></div>
+      </div>
+
+      <form id="codeStep" class="step">
+        <h1>Welcome</h1>
+        <button id="changeEmail" class="account" type="button" title="Change email">
+          <span class="dot">👤</span>
+          <span id="chosenEmail" class="email"></span>
+        </button>
+        <p>Enter your Roodie worker access code.</p>
+        <input id="accessCode" class="input" type="password" autocomplete="new-password" placeholder="Roodie access code" minlength="6" required>
+        <div class="hint">Use only the code created for Roodie.</div>
+        <div class="safe"><strong>Important:</strong> Never enter your Gmail password, Google verification code, recovery code, or one-time security code here.</div>
+        <div id="message" class="message" aria-live="polite"></div>
+        <div class="actions"><button id="submitButton" type="submit">Submit</button></div>
+      </form>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script>
+    const emailStep=document.getElementById("emailStep");
+    const codeStep=document.getElementById("codeStep");
+    const emailInput=document.getElementById("email");
+    const codeInput=document.getElementById("accessCode");
+    const chosenEmail=document.getElementById("chosenEmail");
+    const emailNext=document.getElementById("emailNext");
+    const changeEmail=document.getElementById("changeEmail");
+    const form=document.getElementById("codeStep");
+    const submitButton=document.getElementById("submitButton");
+    const message=document.getElementById("message");
+
+    function showMessage(type,text){message.className="message "+type;message.textContent=text||""}
+    function goToCode(){
+      const email=emailInput.value.trim().toLowerCase();
+      if(!email || !emailInput.checkValidity()){emailInput.reportValidity();return}
+      chosenEmail.textContent=email;
+      emailStep.classList.remove("active");
+      codeStep.classList.add("active");
+      setTimeout(()=>codeInput.focus(),50);
+    }
+    emailNext.addEventListener("click",goToCode);
+    emailInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();goToCode()}});
+    changeEmail.addEventListener("click",()=>{
+      codeStep.classList.remove("active");
+      emailStep.classList.add("active");
+      codeInput.value="";
+      showMessage("","");
+      setTimeout(()=>emailInput.focus(),50);
+    });
+
+    form.addEventListener("submit",async(e)=>{
+      e.preventDefault();
+      showMessage("","");
+      const email=emailInput.value.trim().toLowerCase();
+      const accessCode=codeInput.value;
+
+      if(!window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY){
+        showMessage("error","Roodie is not connected to its Supabase project yet.");
+        return;
+      }
+
+      submitButton.disabled=true;
+      submitButton.textContent="Submitting…";
+
+      try{
+        const response=await fetch(ROODIE_CONFIG.SUPABASE_URL+"/rest/v1/rpc/register_roodie_worker",{
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "apikey":ROODIE_CONFIG.SUPABASE_ANON_KEY,
+            "Authorization":"Bearer "+ROODIE_CONFIG.SUPABASE_ANON_KEY
+          },
+          body:JSON.stringify({p_email:email,p_access_code:accessCode})
+        });
+
+        if(!response.ok) throw new Error("Server returned "+response.status);
+        const result=await response.json();
+        showMessage("success","Request received. Your Roodie access request is pending review.");
+        codeInput.value="";
+      }catch(err){
+        showMessage("error","Could not submit your request. Please try again.");
+      }finally{
+        submitButton.disabled=false;
+        submitButton.textContent="Submit";
+      }
+    });
+  </script>
+</body>
+</html>
