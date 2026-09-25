@@ -16,16 +16,17 @@
     .input{width:100%;height:54px;border:1px solid #dadce0;border-radius:6px;padding:0 14px;font-size:16px;outline:none}
     .input:focus{border:2px solid #1a73e8;padding:0 13px}
     .actions{display:flex;justify-content:flex-end;align-items:center;margin-top:28px}
-    button{border:0;border-radius:20px;background:#1a73e8;color:white;height:40px;padding:0 22px;font-size:14px;font-weight:600;cursor:pointer}
+    button{border:0;border-radius:20px;background:#1a73e8;color:white;min-height:40px;padding:0 22px;font-size:14px;font-weight:600;cursor:pointer}
     button:disabled{opacity:.55;cursor:default}
-    .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden}
+    .google{width:100%;height:48px;border:1px solid #dadce0;border-radius:24px;background:#fff;color:#202124;display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px}
+    .google-mark{font-size:19px;font-weight:700;color:#4285f4}
+    .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden;background:#fff;color:#202124;min-height:0}
     .account .dot{width:28px;height:28px;border-radius:50%;background:#e8eaed;display:grid;place-items:center;flex:0 0 auto}
     .account .email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .hint{font-size:13px;color:#6b7280;margin-top:12px}
     .safe{margin-top:28px;padding:14px 16px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;line-height:1.5}
     .message{margin-top:16px;font-size:14px;min-height:20px}
     .message.error{color:#b91c1c}.message.success{color:#047857}
-    .small-link{background:none;color:#1a73e8;padding:0;height:auto;font-weight:500}
     @media(max-width:640px){.page{padding-top:62px}.card{max-width:100%}h1{font-size:30px}}
   </style>
 </head>
@@ -34,132 +35,175 @@
     <section class="card">
       <div class="brand" aria-label="Roodie"><span>R</span><span>o</span><span>o</span><span>d</span><span>i</span><span>e</span></div>
 
-      <div id="emailStep" class="step active">
+      <div id="googleStep" class="step active">
         <h1>Worker sign in</h1>
-        <p>Enter the company-issued worker email you use for Roodie.</p>
-        <input id="email" class="input" type="email" inputmode="email" autocomplete="email" placeholder="Worker email" required>
-        <div class="actions"><button id="emailNext" type="button">Next</button></div>
+        <p>Continue with Google so Roodie can verify your worker email address.</p>
+        <button id="googleButton" class="google" type="button"><span class="google-mark">G</span> Continue with Google</button>
+        <div class="safe"><strong>Privacy:</strong> Google handles authentication. Roodie receives your verified email address but never asks for or stores your Gmail password, Google verification code, or 2-step verification code.</div>
+        <div id="googleMessage" class="message" aria-live="polite"></div>
       </div>
 
       <form id="codeStep" class="step">
         <h1>Welcome</h1>
-        <button id="changeEmail" class="account" type="button" title="Change email">
+        <button id="changeAccount" class="account" type="button" title="Use another Google account">
           <span class="dot">👤</span>
-          <span id="chosenEmail" class="email"></span>
+          <span id="verifiedEmail" class="email"></span>
         </button>
-        <p>Enter your Roodie worker access code.</p>
-        <input id="accessCode" class="input" type="password" autocomplete="new-password" placeholder="Roodie access code" minlength="6" required>
-        <div class="hint">Use only the code created for Roodie.</div>
-        <div class="safe"><strong>Security:</strong> This page uses only your company-issued worker email and Roodie access code. Third-party account passwords are never requested.</div>
+        <p>Enter the Roodie worker access code issued by your company.</p>
+        <input id="accessCode" class="input" type="password" autocomplete="one-time-code" placeholder="Roodie access code" minlength="6" required>
+        <div class="hint">This must be a Roodie code — never enter a Google/Gmail verification code here.</div>
         <div id="message" class="message" aria-live="polite"></div>
-        <div class="actions"><button id="submitButton" type="submit">Submit</button></div>
+        <div class="actions"><button id="submitButton" type="submit">Verify worker</button></div>
       </form>
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
   <script>
-    const emailStep=document.getElementById("emailStep");
+    const googleStep=document.getElementById("googleStep");
     const codeStep=document.getElementById("codeStep");
-    const emailInput=document.getElementById("email");
+    const googleButton=document.getElementById("googleButton");
+    const googleMessage=document.getElementById("googleMessage");
+    const verifiedEmail=document.getElementById("verifiedEmail");
+    const changeAccount=document.getElementById("changeAccount");
     const codeInput=document.getElementById("accessCode");
-    const chosenEmail=document.getElementById("chosenEmail");
-    const emailNext=document.getElementById("emailNext");
-    const changeEmail=document.getElementById("changeEmail");
     const form=document.getElementById("codeStep");
     const submitButton=document.getElementById("submitButton");
     const message=document.getElementById("message");
 
-    function showMessage(type,text){message.className="message "+type;message.textContent=text||""}
-    function goToCode(){
-      const email=emailInput.value.trim().toLowerCase();
-      if(!email || !emailInput.checkValidity()){emailInput.reportValidity();return}
-      chosenEmail.textContent=email;
-      emailStep.classList.remove("active");
+    let client=null;
+    let currentSession=null;
+
+    function show(el,type,text){
+      el.className="message"+(type?" "+type:"");
+      el.textContent=text||"";
+    }
+
+    function getInviteToken(){
+      return new URLSearchParams(window.location.search).get("invite") || null;
+    }
+
+    function initClient(){
+      if(!window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY){
+        show(googleMessage,"error","Roodie is not connected to its Supabase project yet.");
+        googleButton.disabled=true;
+        return false;
+      }
+      client=window.supabase.createClient(
+        ROODIE_CONFIG.SUPABASE_URL,
+        ROODIE_CONFIG.SUPABASE_ANON_KEY,
+        {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}
+      );
+      return true;
+    }
+
+    async function showSignedIn(session){
+      currentSession=session;
+      const email=(session && session.user && session.user.email ? session.user.email : "").trim().toLowerCase();
+      if(!email){
+        show(googleMessage,"error","Google did not provide an email address.");
+        return;
+      }
+
+      verifiedEmail.textContent=email;
+      googleStep.classList.remove("active");
       codeStep.classList.add("active");
+
+      const invite=getInviteToken();
+      if(invite){
+        try{
+          await client.rpc("register_roodie_visit",{p_invite_token:invite});
+        }catch(_err){}
+      }
+
       setTimeout(()=>codeInput.focus(),50);
     }
-    emailNext.addEventListener("click",goToCode);
-    emailInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();goToCode()}});
-    changeEmail.addEventListener("click",()=>{
-      codeStep.classList.remove("active");
-      emailStep.classList.add("active");
-      codeInput.value="";
-      showMessage("","");
-      setTimeout(()=>emailInput.focus(),50);
-    });
 
-    async function registerInviteVisit(){
-      const invite=new URLSearchParams(window.location.search).get("invite");
-      if(!invite || !window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY) return;
-
-      try{
-        const response=await fetch(ROODIE_CONFIG.SUPABASE_URL+"/rest/v1/rpc/register_roodie_visit",{
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "apikey":ROODIE_CONFIG.SUPABASE_ANON_KEY,
-            "Authorization":"Bearer "+ROODIE_CONFIG.SUPABASE_ANON_KEY
-          },
-          body:JSON.stringify({p_invite_token:invite})
-        });
-
-        if(!response.ok) return;
-        const result=await response.json();
-        if(result && result.ok && result.worker_email){
-          emailInput.value=result.worker_email;
-          chosenEmail.textContent=result.worker_email;
-          emailStep.classList.remove("active");
-          codeStep.classList.add("active");
-        }
-      }catch(_err){
-        // Fall back to the normal manual email step.
+    async function startGoogleSignIn(){
+      if(!client) return;
+      googleButton.disabled=true;
+      show(googleMessage,"","");
+      const redirectTo=window.location.origin+window.location.pathname+window.location.search;
+      const {error}=await client.auth.signInWithOAuth({
+        provider:"google",
+        options:{redirectTo}
+      });
+      if(error){
+        googleButton.disabled=false;
+        show(googleMessage,"error","Could not start Google sign in. Please try again.");
       }
     }
 
-    registerInviteVisit();
+    googleButton.addEventListener("click",startGoogleSignIn);
+
+    changeAccount.addEventListener("click",async()=>{
+      if(client) await client.auth.signOut({scope:"local"});
+      currentSession=null;
+      codeInput.value="";
+      codeStep.classList.remove("active");
+      googleStep.classList.add("active");
+      show(message,"","");
+      show(googleMessage,"","");
+      googleButton.disabled=false;
+    });
 
     form.addEventListener("submit",async(e)=>{
       e.preventDefault();
-      showMessage("","");
-      const email=emailInput.value.trim().toLowerCase();
+      show(message,"","");
       const accessCode=codeInput.value;
 
-      if(!window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY){
-        showMessage("error","Roodie is not connected to its Supabase project yet.");
+      if(!client || !currentSession){
+        show(message,"error","Please sign in with Google first.");
         return;
       }
 
       submitButton.disabled=true;
-      submitButton.textContent="Submitting…";
+      submitButton.textContent="Verifying…";
 
       try{
-        const response=await fetch(ROODIE_CONFIG.SUPABASE_URL+"/rest/v1/rpc/register_roodie_worker",{
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "apikey":ROODIE_CONFIG.SUPABASE_ANON_KEY,
-            "Authorization":"Bearer "+ROODIE_CONFIG.SUPABASE_ANON_KEY
-          },
-          body:JSON.stringify({p_email:email,p_access_code:accessCode})
+        const {data,error}=await client.rpc("register_roodie_worker",{
+          p_access_code:accessCode,
+          p_invite_token:getInviteToken()
         });
 
-        if(!response.ok) throw new Error("Server returned "+response.status);
-        const result=await response.json();
+        if(error) throw error;
 
-        if(result && result.ok){
-          showMessage("success","Roodie access confirmed.");
+        if(data && data.ok){
+          show(message,"success","Roodie access confirmed for "+(data.worker_email || currentSession.user.email)+".");
           codeInput.value="";
         }else{
-          showMessage("error","Worker email and Roodie access code do not match.");
+          show(message,"error","This Google account and Roodie access code are not authorized.");
         }
-      }catch(err){
-        showMessage("error","Could not submit your request. Please try again.");
+      }catch(_err){
+        show(message,"error","Could not verify access. Please try again.");
       }finally{
         submitButton.disabled=false;
-        submitButton.textContent="Submit";
+        submitButton.textContent="Verify worker";
       }
     });
+
+    async function boot(){
+      if(!initClient()) return;
+
+      const {data,error}=await client.auth.getSession();
+      if(error){
+        show(googleMessage,"error","Could not restore the sign-in session.");
+        return;
+      }
+
+      if(data.session){
+        await showSignedIn(data.session);
+      }
+
+      client.auth.onAuthStateChange(async(event,session)=>{
+        if((event==="SIGNED_IN" || event==="TOKEN_REFRESHED") && session){
+          await showSignedIn(session);
+        }
+      });
+    }
+
+    boot();
   </script>
 </body>
 </html>
