@@ -1,65 +1,62 @@
-# Roodie Worker Access
+# Roodie Worker Verification
 
-Roodie now uses Google identity directly. There is no manual Gmail-to-code setup.
+Roodie is now an installable Progressive Web App (PWA).
 
 ## Worker flow
 
-1. The worker opens Roodie.
-2. The worker taps Continue with Google.
-3. Google authenticates the account.
-4. Supabase gives Roodie the verified Gmail identity.
-5. Roodie automatically reads Google's unique account ID for that Google identity.
-6. Supabase creates an access request containing the Gmail + Google account ID.
-7. The administrator reviews the request and changes Pending to Approved, Rejected, or Blocked.
-8. The worker taps Check approval.
+1. Worker opens the Roodie website.
+2. On supported Android browsers, the worker can tap **Install Roodie app**.
+3. The installation receives a random Roodie installation ID stored locally for that installation.
+4. Worker taps **Continue with Google**.
+5. Google verifies the account.
+6. Roodie records:
+   - verified Gmail
+   - Google's provider account ID
+   - Roodie installation ID
+7. Supabase creates a **Pending** request for that account + installation.
+8. Administrator changes Pending to Approved, Rejected, or Blocked.
+9. Worker taps **Check approval**.
+10. Only the approved account + installation combination is accepted.
 
-The worker does not type any Roodie code.
+A different browser installation or cleared site storage can result in a new installation ID and therefore a new approval request.
 
-## Where to review requests
+## Installable app files
 
-Open the Roodie Supabase project and go to:
+- `manifest.webmanifest` — PWA metadata
+- `sw.js` — service worker
+- `icon.svg` — Roodie app icon
+- `index.html` — sign-in, install and approval UI
 
-Table Editor -> roodie_access_requests
+GitHub Pages serves the app over HTTPS, which supports PWA installation in compatible browsers.
 
-Important columns:
+## Supabase admin review
 
-- worker_email — the verified Gmail address.
-- google_account_id — Google's unique provider account identifier.
-- status — Pending, Approved, Rejected, or Blocked.
-- requested_at — when Roodie created the request.
-- last_checked_at — the most recent approval check.
-
-To grant access, change status from Pending to Approved.
-
-## Google identity
-
-The Google account ID is obtained automatically from the Google identity attached to the Supabase-authenticated user. It is not manually associated in the roodie_email_codes table.
-
-The Google account ID is also not a Gmail password, OTP, recovery code, or verification code.
-
-## Supabase setup
-
-For a fresh Roodie project:
-
-1. Run supabase-setup.sql.
-2. Enable Google under Supabase Authentication providers.
-3. Configure the Google OAuth client and Supabase callback URL.
-4. Add the deployed Roodie site to the allowed redirect URLs.
-5. Keep only the public Supabase URL and publishable key in config.js.
-
-Never expose the Google client secret or Supabase service-role key in the public GitHub repository.
-
-
-## Admin review view
-
-For a simpler Supabase screen, open:
+Open:
 
 **Table Editor -> roodie_access_review**
 
-It shows the important fields side by side:
+The view contains:
 
-- `email` — verified Gmail
-- `password` — your chosen label for the Google account ID
-- `status` — Pending / Approved / Rejected / Blocked
+- `email`
+- `google_account_id`
+- `install_id`
+- `status`
+- timestamps
 
-The `password` column in this review view is **not the Gmail login password**. It is an alias for Google's unique account identifier.
+To approve an installation, edit the source row in:
+
+**Table Editor -> roodie_access_requests**
+
+and change:
+
+`Pending -> Approved`
+
+## Security boundary
+
+Roodie does not collect or read Google/Gmail passwords, OTPs, recovery codes, SMS, browser cookies, saved browser credentials, or authentication secrets.
+
+Google authentication remains on Google's own OAuth page. Roodie receives only the identity information Google makes available through the authorized sign-in flow.
+
+## Future stronger device verification
+
+The PWA installation ID is an application-generated identifier, not a hardware identifier. If Roodie later becomes a native Android app, Android Play Integrity can be added for stronger app/device integrity checks.
