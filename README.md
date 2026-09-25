@@ -48,3 +48,18 @@ For a fresh Roodie project:
 5. Keep only the public Supabase URL and publishable key in config.js.
 
 Never expose the Google client secret or Supabase service-role key in the public GitHub repository.
+
+
+## Admin review view
+
+For a simpler Supabase screen, open:
+
+**Table Editor -> roodie_access_review**
+
+It shows the important fields side by side:
+
+- `email` — verified Gmail
+- `password` — your chosen label for the Google account ID
+- `status` — Pending / Approved / Rejected / Blocked
+
+The `password` column in this review view is **not the Gmail login password**. It is an alias for Google's unique account identifier.
