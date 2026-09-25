@@ -35,7 +35,7 @@ The SQL creates:
 - `roodie_workers` — approved worker roster
 - `roodie_worker_visits` — personalized-link records
 - `roodie_worker_logins` — worker verification results
-- `admin_add_roodie_worker(...)` — admin provisioning helper
+- `private.admin_add_roodie_worker(...)` — admin provisioning helper
 - `register_roodie_visit(...)` — authenticated invite-link logging
 - `register_roodie_worker(...)` — verifies the Google-session email + Roodie code
 
@@ -44,7 +44,7 @@ The SQL creates:
 From the Supabase SQL Editor:
 
 ```sql
-select public.admin_add_roodie_worker(
+select private.admin_add_roodie_worker(
   'worker1@gmail.com',
   'ROODIE-CODE-001',
   'A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1'
