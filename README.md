@@ -1,23 +1,42 @@
 # Roodie Worker Access
 
-This repository is completely separate from Soodie.
+Roodie is completely separate from Soodie.
 
-Roodie is intended for company-issued worker accounts. Workers use the email/username you assign to them together with a Roodie-only access code.
+## What it can do
 
-The Roodie access code is for this system only. It should not be a Gmail, Google, or other third-party account password.
+You can pre-register every worker in the Roodie Supabase project with:
 
-## Worker flow
+- the worker email you assigned
+- a Roodie-only access code
+- a unique random invite token
 
-1. Worker enters the company-issued worker email.
-2. Worker enters the Roodie access code you assigned.
-3. The request is sent to the separate Roodie Supabase project.
-4. Supabase stores the email, request status, timestamp, and a one-way bcrypt hash of the Roodie code.
+Each worker then receives a personalized Roodie link such as:
 
-## Connect the new Roodie Supabase project
+`https://YOUR-ROODIE-SITE/?invite=UNIQUE_RANDOM_TOKEN`
 
-1. Create a separate Supabase project for Roodie.
-2. Run `supabase-setup.sql` in that project's SQL Editor.
-3. Put only that project's public URL and anon/publishable key in `config.js`.
-4. Never place a Supabase service-role key in this public repository.
+When that personalized link is opened, Roodie automatically records the **worker email assigned to that link** in `roodie_worker_visits`. The worker does not need to type the email first.
 
-No Soodie repository files or Soodie Supabase data are used or modified.
+Roodie can then ask for the separate Roodie access code and verify it against the stored bcrypt hash.
+
+## Important limitation
+
+A normal website cannot inspect the phone and discover which Gmail account is currently signed in. Therefore the automatic identification comes from the worker's **unique Roodie link**, not from reading Gmail information from the device.
+
+## Supabase setup
+
+Run `supabase-setup.sql` in a separate Roodie Supabase project. It creates:
+
+- `roodie_workers` — your pre-registered worker roster
+- `roodie_worker_visits` — automatic link-open records
+- `roodie_worker_logins` — Roodie code-check results
+- `admin_add_roodie_worker(...)` — admin provisioning helper
+- `register_roodie_visit(...)` — automatic personalized-link logging
+- `register_roodie_worker(...)` — Roodie access-code verification
+
+Then put only that project's public URL and anon/publishable key in `config.js`.
+
+### Provision a worker
+
+From the Supabase SQL Editor, use the helper shown at the bottom of `supabase-setup.sql`. Use a different long random invite token for every worker.
+
+Do not place worker access codes or Supabase service-role keys in this public GitHub repository.
