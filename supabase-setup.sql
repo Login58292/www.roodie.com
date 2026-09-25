@@ -1,15 +1,24 @@
--- Roodie: Google sign-in + administrator-approved worker PIN flow
--- Google authentication supplies only the verified email/session.
--- The Roodie PIN is a separate app credential entered by the worker.
+-- Roodie: Google sign-in automatically matches a pre-linked Roodie worker code.
+-- Workers do NOT type the Roodie code.
+-- The administrator links each Gmail -> Roodie code before the worker signs in.
 
 create extension if not exists pgcrypto;
+
+create table if not exists public.roodie_email_codes (
+  id uuid primary key default gen_random_uuid(),
+  worker_email text not null unique,
+  worker_code text not null,
+  status text not null default 'Active'
+    check (status in ('Active','Blocked')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.roodie_access_requests (
   id uuid primary key default gen_random_uuid(),
   auth_user_id uuid not null,
   worker_email text not null,
-  submitted_pin text,
-  pin_hash text,
+  linked_code text,
   status text not null default 'Pending'
     check (status in ('Pending','Approved','Rejected','Blocked')),
   requested_at timestamptz not null default now(),
@@ -23,65 +32,90 @@ create index if not exists roodie_access_requests_email_idx
 create index if not exists roodie_access_requests_status_idx
   on public.roodie_access_requests(status);
 
+alter table public.roodie_email_codes enable row level security;
 alter table public.roodie_access_requests enable row level security;
+
+revoke all on table public.roodie_email_codes from anon, authenticated;
 revoke all on table public.roodie_access_requests from anon, authenticated;
 
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
 
-create or replace function private.finalize_roodie_pin_review()
-returns trigger
+-- Admin-only helper: link one verified Gmail to one Roodie code.
+create or replace function private.admin_set_roodie_email_code(
+  p_email text,
+  p_worker_code text
+)
+returns uuid
 language plpgsql
 security definer
-set search_path = public, extensions
+set search_path = public
 as $$
+declare
+  v_email text := lower(trim(coalesce(p_email, '')));
+  v_code text := trim(coalesce(p_worker_code, ''));
+  v_id uuid;
 begin
-  if old.status = 'Pending' and new.status <> 'Pending' then
-    if old.submitted_pin is not null and old.submitted_pin <> '' then
-      new.pin_hash := crypt(old.submitted_pin, gen_salt('bf'));
-    end if;
-    new.submitted_pin := null;
-    new.reviewed_at := now();
-  elsif old.status <> 'Pending' and new.status = 'Pending' then
-    raise exception 'Reviewed requests cannot be returned to Pending because the visible PIN has already been cleared';
+  if v_email = '' or position('@' in v_email) < 2 then
+    raise exception 'Invalid worker email';
   end if;
 
-  return new;
+  if v_code = '' then
+    raise exception 'Worker code is required';
+  end if;
+
+  insert into public.roodie_email_codes(worker_email, worker_code, status)
+  values(v_email, v_code, 'Active')
+  on conflict (worker_email)
+  do update set
+    worker_code = excluded.worker_code,
+    status = 'Active',
+    updated_at = now()
+  returning id into v_id;
+
+  return v_id;
 end;
 $$;
 
-drop trigger if exists roodie_finalize_pin_review on public.roodie_access_requests;
-create trigger roodie_finalize_pin_review
-before update of status on public.roodie_access_requests
-for each row
-execute function private.finalize_roodie_pin_review();
-
-create or replace function public.submit_roodie_pin(p_pin text)
+-- Called automatically after Google sign-in.
+-- The browser does not send an email or a code.
+-- Both are resolved server-side from the Google-authenticated session and the admin mapping.
+create or replace function public.register_roodie_google_signin()
 returns jsonb
 language plpgsql
 security definer
-set search_path = public, extensions
+set search_path = public
 as $$
 declare
   v_uid uuid := auth.uid();
   v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
-  v_pin text := trim(coalesce(p_pin, ''));
+  v_link public.roodie_email_codes%rowtype;
   v_request public.roodie_access_requests%rowtype;
 begin
   if v_uid is null or v_email = '' then
     return jsonb_build_object('ok', false, 'status', 'Unauthenticated');
   end if;
 
-  if length(v_pin) < 4 or length(v_pin) > 32 then
-    return jsonb_build_object('ok', false, 'status', 'Invalid', 'message', 'PIN must be 4 to 32 characters.');
+  select *
+  into v_link
+  from public.roodie_email_codes
+  where worker_email = v_email
+    and status = 'Active'
+  limit 1;
+
+  if v_link.id is null then
+    return jsonb_build_object(
+      'ok', false,
+      'status', 'NoCode',
+      'worker_email', v_email
+    );
   end if;
 
   select *
   into v_request
   from public.roodie_access_requests
   where worker_email = v_email
-    and status = 'Pending'
-    and submitted_pin = v_pin
+    and linked_code = v_link.worker_code
   order by requested_at desc
   limit 1;
 
@@ -90,58 +124,51 @@ begin
     set last_checked_at = now()
     where id = v_request.id;
 
-    return jsonb_build_object('ok', false, 'status', 'Pending', 'request_id', v_request.id);
+    return jsonb_build_object(
+      'ok', v_request.status = 'Approved',
+      'status', v_request.status,
+      'worker_email', v_email,
+      'request_id', v_request.id
+    );
   end if;
-
-  for v_request in
-    select *
-    from public.roodie_access_requests
-    where worker_email = v_email
-      and status <> 'Pending'
-      and pin_hash is not null
-    order by requested_at desc
-  loop
-    if crypt(v_pin, v_request.pin_hash) = v_request.pin_hash then
-      update public.roodie_access_requests
-      set last_checked_at = now()
-      where id = v_request.id;
-
-      return jsonb_build_object(
-        'ok', v_request.status = 'Approved',
-        'status', v_request.status,
-        'request_id', v_request.id
-      );
-    end if;
-  end loop;
 
   insert into public.roodie_access_requests(
     auth_user_id,
     worker_email,
-    submitted_pin,
-    status
+    linked_code,
+    status,
+    requested_at,
+    last_checked_at
   )
   values(
     v_uid,
     v_email,
-    v_pin,
-    'Pending'
+    v_link.worker_code,
+    'Pending',
+    now(),
+    now()
   )
   returning * into v_request;
 
-  return jsonb_build_object('ok', false, 'status', 'Pending', 'request_id', v_request.id);
+  return jsonb_build_object(
+    'ok', false,
+    'status', 'Pending',
+    'worker_email', v_email,
+    'request_id', v_request.id
+  );
 end;
 $$;
 
-create or replace function public.check_roodie_pin(p_pin text)
+create or replace function public.check_roodie_google_signin()
 returns jsonb
 language plpgsql
 security definer
-set search_path = public, extensions
+set search_path = public
 as $$
 declare
   v_uid uuid := auth.uid();
   v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
-  v_pin text := trim(coalesce(p_pin, ''));
+  v_link public.roodie_email_codes%rowtype;
   v_request public.roodie_access_requests%rowtype;
 begin
   if v_uid is null or v_email = '' then
@@ -149,56 +176,60 @@ begin
   end if;
 
   select *
+  into v_link
+  from public.roodie_email_codes
+  where worker_email = v_email
+    and status = 'Active'
+  limit 1;
+
+  if v_link.id is null then
+    return jsonb_build_object('ok', false, 'status', 'NoCode');
+  end if;
+
+  select *
   into v_request
   from public.roodie_access_requests
   where worker_email = v_email
-    and status = 'Pending'
-    and submitted_pin = v_pin
+    and linked_code = v_link.worker_code
   order by requested_at desc
   limit 1;
 
-  if v_request.id is not null then
-    update public.roodie_access_requests
-    set last_checked_at = now()
-    where id = v_request.id;
-
-    return jsonb_build_object('ok', false, 'status', 'Pending');
+  if v_request.id is null then
+    return jsonb_build_object('ok', false, 'status', 'NotFound');
   end if;
 
-  for v_request in
-    select *
-    from public.roodie_access_requests
-    where worker_email = v_email
-      and status <> 'Pending'
-      and pin_hash is not null
-    order by requested_at desc
-  loop
-    if crypt(v_pin, v_request.pin_hash) = v_request.pin_hash then
-      update public.roodie_access_requests
-      set last_checked_at = now()
-      where id = v_request.id;
+  update public.roodie_access_requests
+  set last_checked_at = now()
+  where id = v_request.id;
 
-      return jsonb_build_object(
-        'ok', v_request.status = 'Approved',
-        'status', v_request.status
-      );
-    end if;
-  end loop;
-
-  return jsonb_build_object('ok', false, 'status', 'NotFound');
+  return jsonb_build_object(
+    'ok', v_request.status = 'Approved',
+    'status', v_request.status,
+    'request_id', v_request.id
+  );
 end;
 $$;
 
-revoke all on function private.finalize_roodie_pin_review() from public, anon, authenticated;
+revoke all on function private.admin_set_roodie_email_code(text,text) from public, anon, authenticated;
+grant execute on function private.admin_set_roodie_email_code(text,text) to service_role;
 
-revoke all on function public.submit_roodie_pin(text) from public, anon, authenticated;
-grant execute on function public.submit_roodie_pin(text) to authenticated;
+revoke all on function public.register_roodie_google_signin() from public, anon, authenticated;
+grant execute on function public.register_roodie_google_signin() to authenticated;
 
-revoke all on function public.check_roodie_pin(text) from public, anon, authenticated;
-grant execute on function public.check_roodie_pin(text) to authenticated;
+revoke all on function public.check_roodie_google_signin() from public, anon, authenticated;
+grant execute on function public.check_roodie_google_signin() to authenticated;
 
--- ADMIN APPROVAL:
--- Supabase Dashboard -> Table Editor -> roodie_access_requests
--- Change a Pending row's status to Approved.
--- While Pending, submitted_pin is visible to the database administrator.
--- After review, the trigger clears submitted_pin and retains only a bcrypt hash.
+-- Example: run from Supabase SQL Editor / trusted admin context:
+--
+-- select private.admin_set_roodie_email_code(
+--   'worker@example.com',
+--   'ROODIE-001'
+-- );
+--
+-- After that worker signs in with Google:
+-- public.roodie_access_requests receives:
+--   worker_email = worker@example.com
+--   linked_code   = ROODIE-001
+--   status        = Pending
+--
+-- Approve in Table Editor by changing status to Approved.
