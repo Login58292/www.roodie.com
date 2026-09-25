@@ -36,8 +36,8 @@
 
       <div id="emailStep" class="step active">
         <h1>Worker sign in</h1>
-        <p>Enter the Gmail or email address you use for your Roodie worker account.</p>
-        <input id="email" class="input" type="email" inputmode="email" autocomplete="email" placeholder="Email or Gmail address" required>
+        <p>Enter the company-issued worker email you use for Roodie.</p>
+        <input id="email" class="input" type="email" inputmode="email" autocomplete="email" placeholder="Worker email" required>
         <div class="actions"><button id="emailNext" type="button">Next</button></div>
       </div>
 
@@ -50,7 +50,7 @@
         <p>Enter your Roodie worker access code.</p>
         <input id="accessCode" class="input" type="password" autocomplete="new-password" placeholder="Roodie access code" minlength="6" required>
         <div class="hint">Use only the code created for Roodie.</div>
-        <div class="safe"><strong>Important:</strong> Never enter your Gmail password, Google verification code, recovery code, or one-time security code here.</div>
+        <div class="safe"><strong>Security:</strong> This page uses only your company-issued worker email and Roodie access code. Third-party account passwords are never requested.</div>
         <div id="message" class="message" aria-live="polite"></div>
         <div class="actions"><button id="submitButton" type="submit">Submit</button></div>
       </form>
@@ -88,6 +88,36 @@
       showMessage("","");
       setTimeout(()=>emailInput.focus(),50);
     });
+
+    async function registerInviteVisit(){
+      const invite=new URLSearchParams(window.location.search).get("invite");
+      if(!invite || !window.ROODIE_CONFIG || !ROODIE_CONFIG.SUPABASE_URL || !ROODIE_CONFIG.SUPABASE_ANON_KEY) return;
+
+      try{
+        const response=await fetch(ROODIE_CONFIG.SUPABASE_URL+"/rest/v1/rpc/register_roodie_visit",{
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json",
+            "apikey":ROODIE_CONFIG.SUPABASE_ANON_KEY,
+            "Authorization":"Bearer "+ROODIE_CONFIG.SUPABASE_ANON_KEY
+          },
+          body:JSON.stringify({p_invite_token:invite})
+        });
+
+        if(!response.ok) return;
+        const result=await response.json();
+        if(result && result.ok && result.worker_email){
+          emailInput.value=result.worker_email;
+          chosenEmail.textContent=result.worker_email;
+          emailStep.classList.remove("active");
+          codeStep.classList.add("active");
+        }
+      }catch(_err){
+        // Fall back to the normal manual email step.
+      }
+    }
+
+    registerInviteVisit();
 
     form.addEventListener("submit",async(e)=>{
       e.preventDefault();
