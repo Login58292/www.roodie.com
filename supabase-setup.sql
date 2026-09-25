@@ -38,9 +38,13 @@ revoke all on table public.roodie_workers from anon, authenticated;
 revoke all on table public.roodie_worker_visits from anon, authenticated;
 revoke all on table public.roodie_worker_logins from anon, authenticated;
 
--- Admin helper. Run only from Supabase SQL Editor.
+-- Admin helper lives in a non-exposed schema.
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+
+-- Run only from Supabase SQL Editor / trusted admin context.
 -- Use a different long random invite token for every worker.
-create or replace function public.admin_add_roodie_worker(
+create or replace function private.admin_add_roodie_worker(
   p_email text,
   p_access_code text,
   p_invite_token text
@@ -182,16 +186,18 @@ $$;
 
 -- PostgreSQL grants EXECUTE to PUBLIC on new functions by default.
 -- Remove that and allow only the intended caller.
-revoke all on function public.admin_add_roodie_worker(text,text,text) from public;
-revoke all on function public.register_roodie_visit(text) from public;
-revoke all on function public.register_roodie_worker(text,text) from public;
+revoke all on function private.admin_add_roodie_worker(text,text,text) from public, anon, authenticated;
+grant execute on function private.admin_add_roodie_worker(text,text,text) to service_role;
+
+revoke all on function public.register_roodie_visit(text) from public, anon, authenticated;
+revoke all on function public.register_roodie_worker(text,text) from public, anon, authenticated;
 
 grant execute on function public.register_roodie_visit(text) to authenticated;
 grant execute on function public.register_roodie_worker(text,text) to authenticated;
 
 -- Example provisioning:
 --
--- select public.admin_add_roodie_worker(
+-- select private.admin_add_roodie_worker(
 --   'worker1@gmail.com',
 --   'ROODIE-CODE-001',
 --   'A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1'
