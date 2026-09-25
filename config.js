@@ -1,7 +1,7 @@
-// Roodie uses its own Supabase project.
-// Paste ONLY the public project URL and anon/publishable key here.
-// Never put a service_role key in a public GitHub repository.
+// Roodie uses its own isolated Supabase project.
+// This file contains only public frontend configuration.
+// Never place a service_role key or Google client secret here.
 window.ROODIE_CONFIG = {
-  SUPABASE_URL: "",
-  SUPABASE_ANON_KEY: ""
+  SUPABASE_URL: "https://hebtaiwbdiswordvpdgy.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_vQu1VTnM1BRzNvW8lzDpEA_vJUHBtRQ"
 };
