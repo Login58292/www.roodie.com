@@ -2,14 +2,16 @@
 
 This repository is completely separate from Soodie.
 
+Roodie is intended for company-issued worker accounts. Workers use the email/username you assign to them together with a Roodie-only access code.
+
+The Roodie access code is for this system only. It should not be a Gmail, Google, or other third-party account password.
+
 ## Worker flow
 
-1. Worker enters a Gmail/email address.
-2. Worker enters a **Roodie-only access code**.
-3. The request is sent to a separate Roodie Supabase project.
+1. Worker enters the company-issued worker email.
+2. Worker enters the Roodie access code you assigned.
+3. The request is sent to the separate Roodie Supabase project.
 4. Supabase stores the email, request status, timestamp, and a one-way bcrypt hash of the Roodie code.
-
-The page tells workers not to enter Gmail passwords, Google verification codes, recovery codes, or OTPs.
 
 ## Connect the new Roodie Supabase project
 
