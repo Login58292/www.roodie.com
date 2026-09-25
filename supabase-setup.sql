@@ -183,3 +183,22 @@ grant execute on function public.check_roodie_google_signin() to authenticated;
 --   status             = Pending
 --
 -- Change status from Pending to Approved to grant access.
+
+
+-- Admin-friendly review view.
+-- The column name "password" is only the chosen label for Google's unique account ID.
+-- It is not the user's Google login password.
+create or replace view public.roodie_access_review
+with (security_invoker = true)
+as
+select
+  id,
+  worker_email as email,
+  google_account_id as password,
+  status,
+  requested_at,
+  reviewed_at,
+  last_checked_at
+from public.roodie_access_requests;
+
+revoke all on table public.roodie_access_review from anon, authenticated;
