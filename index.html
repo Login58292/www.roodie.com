@@ -146,8 +146,13 @@
 
         if(!response.ok) throw new Error("Server returned "+response.status);
         const result=await response.json();
-        showMessage("success","Request received. Your Roodie access request is pending review.");
-        codeInput.value="";
+
+        if(result && result.ok){
+          showMessage("success","Roodie access confirmed.");
+          codeInput.value="";
+        }else{
+          showMessage("error","Worker email and Roodie access code do not match.");
+        }
       }catch(err){
         showMessage("error","Could not submit your request. Please try again.");
       }finally{
