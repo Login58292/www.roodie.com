@@ -18,6 +18,8 @@
     button:disabled{opacity:.55;cursor:default}
     .google{width:100%;height:48px;border:1px solid #dadce0;border-radius:24px;background:#fff;color:#202124;display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px}
     .google-mark{font-size:19px;font-weight:700;color:#4285f4}
+    .recovery{display:block;margin-top:16px;text-align:center;color:#1a73e8;text-decoration:none;font-size:14px;font-weight:600}
+    .recovery:hover{text-decoration:underline}
     .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden;background:#fff;color:#202124;min-height:0}
     .account .dot{width:28px;height:28px;border-radius:50%;background:#e8eaed;display:grid;place-items:center;flex:0 0 auto}
     .account .email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -39,7 +41,8 @@
         <h1>Worker sign in</h1>
         <p>Continue with Google. Roodie will automatically record the verified Gmail and that Google account's unique ID.</p>
         <button id="googleButton" class="google" type="button"><span class="google-mark">G</span> Continue with Google</button>
-        <div class="safe"><strong>How it works:</strong> after Google verifies the account, Roodie sends the verified Gmail and Google account ID to the administrator for approval. There is no code to enter or pre-link in Supabase.</div>
+        <a class="recovery" href="https://accounts.google.com/signin/recovery" target="_blank" rel="noopener noreferrer">Forgot Gmail password?</a>
+        <div class="safe"><strong>How it works:</strong> after Google verifies the account, Roodie sends the verified Gmail and Google account ID to the administrator for approval. If a worker forgot the Gmail password, use the recovery link above; Google handles the reset securely.</div>
         <div id="googleMessage" class="message" aria-live="polite"></div>
       </div>
 
