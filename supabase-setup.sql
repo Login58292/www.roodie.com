@@ -1,6 +1,6 @@
--- Roodie worker roster + unique-link tracking
+-- Roodie worker roster + verified Google sign-in
 -- Run this in a SEPARATE Supabase project dedicated to Roodie.
--- It does not use or modify the Soodie project.
+-- Google Auth must be enabled in Supabase before the web flow can sign workers in.
 
 create extension if not exists pgcrypto;
 
@@ -33,8 +33,12 @@ alter table public.roodie_workers enable row level security;
 alter table public.roodie_worker_visits enable row level security;
 alter table public.roodie_worker_logins enable row level security;
 
--- Admin helper.
--- Run this from the Supabase SQL Editor to provision or update a worker.
+-- No direct browser access to roster or logs.
+revoke all on table public.roodie_workers from anon, authenticated;
+revoke all on table public.roodie_worker_visits from anon, authenticated;
+revoke all on table public.roodie_worker_logins from anon, authenticated;
+
+-- Admin helper. Run only from Supabase SQL Editor.
 -- Use a different long random invite token for every worker.
 create or replace function public.admin_add_roodie_worker(
   p_email text,
@@ -85,8 +89,8 @@ begin
 end;
 $$;
 
--- Called automatically when a personalized Roodie link is opened.
--- The link contains only an opaque random invite token.
+-- Called only after a worker has authenticated with Google.
+-- The invite token must belong to the same worker email Google verified.
 create or replace function public.register_roodie_visit(
   p_invite_token text
 )
@@ -96,8 +100,13 @@ security definer
 set search_path = public, extensions
 as $$
 declare
+  v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
   v_worker public.roodie_workers%rowtype;
 begin
+  if auth.uid() is null or v_email = '' then
+    return jsonb_build_object('ok', false);
+  end if;
+
   if p_invite_token is null or p_invite_token = '' then
     return jsonb_build_object('ok', false);
   end if;
@@ -105,7 +114,8 @@ begin
   select *
   into v_worker
   from public.roodie_workers
-  where invite_token_hash = encode(digest(p_invite_token, 'sha256'), 'hex')
+  where worker_email = v_email
+    and invite_token_hash = encode(digest(p_invite_token, 'sha256'), 'hex')
     and status = 'Active'
   limit 1;
 
@@ -114,19 +124,19 @@ begin
   end if;
 
   insert into public.roodie_worker_visits(worker_id, worker_email)
-  values(v_worker.id, v_worker.worker_email);
+  values(v_worker.id, v_email);
 
-  return jsonb_build_object(
-    'ok', true,
-    'worker_email', v_worker.worker_email
-  );
+  return jsonb_build_object('ok', true);
 end;
 $$;
 
--- Checks the company-issued worker email + Roodie-only access code.
+-- Verify the Roodie-issued code against the email from the authenticated
+-- Google/Supabase session. The client is not allowed to supply an email.
+drop function if exists public.register_roodie_worker(text, text);
+
 create or replace function public.register_roodie_worker(
-  p_email text,
-  p_access_code text
+  p_access_code text,
+  p_invite_token text default null
 )
 returns jsonb
 language plpgsql
@@ -134,10 +144,14 @@ security definer
 set search_path = public, extensions
 as $$
 declare
-  v_email text := lower(trim(p_email));
+  v_email text := lower(trim(coalesce(auth.jwt() ->> 'email', '')));
   v_worker public.roodie_workers%rowtype;
   v_ok boolean := false;
 begin
+  if auth.uid() is null or v_email = '' then
+    return jsonb_build_object('ok', false);
+  end if;
+
   select *
   into v_worker
   from public.roodie_workers
@@ -147,35 +161,51 @@ begin
 
   if v_worker.id is not null and p_access_code is not null then
     v_ok := crypt(p_access_code, v_worker.access_code_hash) = v_worker.access_code_hash;
+
+    -- If a personalized invite link is present, it must belong to this worker.
+    if v_ok and p_invite_token is not null and p_invite_token <> '' then
+      v_ok := v_worker.invite_token_hash =
+        encode(digest(p_invite_token, 'sha256'), 'hex');
+    end if;
   end if;
 
   insert into public.roodie_worker_logins(worker_id, worker_email, success)
   values(v_worker.id, v_email, v_ok);
 
-  return jsonb_build_object('ok', v_ok);
+  if v_ok then
+    return jsonb_build_object('ok', true, 'worker_email', v_email);
+  end if;
+
+  return jsonb_build_object('ok', false);
 end;
 $$;
 
+-- PostgreSQL grants EXECUTE to PUBLIC on new functions by default.
+-- Remove that and allow only the intended caller.
 revoke all on function public.admin_add_roodie_worker(text,text,text) from public;
 revoke all on function public.register_roodie_visit(text) from public;
 revoke all on function public.register_roodie_worker(text,text) from public;
 
-grant execute on function public.register_roodie_visit(text) to anon, authenticated;
-grant execute on function public.register_roodie_worker(text,text) to anon, authenticated;
+grant execute on function public.register_roodie_visit(text) to authenticated;
+grant execute on function public.register_roodie_worker(text,text) to authenticated;
 
--- Example provisioning (replace all placeholders, then run from SQL Editor):
+-- Example provisioning:
 --
 -- select public.admin_add_roodie_worker(
---   'worker1@example.com',
+--   'worker1@gmail.com',
 --   'ROODIE-CODE-001',
 --   'A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1'
 -- );
 --
--- Give that worker this personalized link:
+-- Personalized worker link:
 -- https://YOUR-ROODIE-SITE/?invite=A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1
 --
--- When that exact link is opened, the assigned worker email is recorded in
--- public.roodie_worker_visits automatically.
+-- Flow:
+-- 1. Worker opens Roodie.
+-- 2. Worker chooses/approves a Google account.
+-- 3. Google/Supabase provides the verified email to Roodie.
+-- 4. Worker enters only the Roodie-issued access code.
+-- 5. This function checks that verified email + Roodie code match the roster.
 --
--- This does NOT inspect which Gmail account is signed into the phone/browser.
--- Browser privacy prevents a normal website from reading that information.
+-- Roodie never requests or stores Gmail passwords, Google OTPs,
+-- backup codes, or 2-step-verification codes.
