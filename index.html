@@ -14,9 +14,6 @@
     h1{font-size:32px;line-height:1.15;font-weight:400;margin:0 0 14px}
     p{font-size:15px;line-height:1.55;color:#5f6368;margin:0 0 26px}
     .step{display:none}.step.active{display:block}
-    .input{width:100%;height:54px;border:1px solid #dadce0;border-radius:6px;padding:0 14px;font-size:16px;outline:none}
-    .input:focus{border:2px solid #1a73e8;padding:0 13px}
-    .actions{display:flex;justify-content:flex-end;align-items:center;margin-top:28px}
     button{border:0;border-radius:20px;background:#1a73e8;color:white;min-height:40px;padding:0 22px;font-size:14px;font-weight:600;cursor:pointer}
     button:disabled{opacity:.55;cursor:default}
     .google{width:100%;height:48px;border:1px solid #dadce0;border-radius:24px;background:#fff;color:#202124;display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px}
@@ -24,10 +21,11 @@
     .account{display:flex;align-items:center;gap:9px;border:1px solid #dadce0;border-radius:20px;padding:7px 12px;width:max-content;max-width:100%;font-size:14px;margin:0 0 24px;overflow:hidden;background:#fff;color:#202124;min-height:0}
     .account .dot{width:28px;height:28px;border-radius:50%;background:#e8eaed;display:grid;place-items:center;flex:0 0 auto}
     .account .email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .hint{font-size:13px;color:#6b7280;margin-top:12px}
     .safe{margin-top:28px;padding:14px 16px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;line-height:1.5}
     .message{margin-top:16px;font-size:14px;min-height:20px;line-height:1.45}
-    .message.error{color:#b91c1c}.message.success{color:#047857}.message.pending{color:#92400e}
+    .message.error{color:#b91c1c}.message.pending{color:#92400e}.message.success{color:#047857}
+    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}
+    .secondary{background:#fff;color:#1a73e8;border:1px solid #dadce0}
     .approved{padding:18px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:12px;color:#166534;line-height:1.55}
     @media(max-width:640px){.page{padding-top:62px}.card{max-width:100%}h1{font-size:30px}}
   </style>
@@ -39,30 +37,29 @@
 
       <div id="googleStep" class="step active">
         <h1>Worker sign in</h1>
-        <p>Continue with Google so Roodie can verify the account being used.</p>
+        <p>Continue with Google. Roodie will automatically match your verified Gmail with the Roodie code already linked to that account.</p>
         <button id="googleButton" class="google" type="button"><span class="google-mark">G</span> Continue with Google</button>
-        <div class="safe"><strong>Privacy:</strong> Google handles Google authentication. Roodie receives the verified email address, not the Gmail password or Google verification code.</div>
+        <div class="safe"><strong>How it works:</strong> after Google verifies the Gmail address, Roodie looks up the company-issued Roodie code already linked to that Gmail and sends the Gmail + linked code to the administrator for approval. The worker does not type the code.</div>
         <div id="googleMessage" class="message" aria-live="polite"></div>
       </div>
 
-      <form id="pinStep" class="step">
-        <h1>Welcome</h1>
+      <div id="requestStep" class="step">
+        <h1>Access request</h1>
         <button id="changeAccount" class="account" type="button" title="Use another Google account">
           <span class="dot">👤</span>
           <span id="verifiedEmail" class="email"></span>
         </button>
-        <p>Enter the Roodie worker PIN given to you. Your request will be sent to the administrator for approval.</p>
-        <input id="workerPin" class="input" type="password" autocomplete="off" placeholder="Roodie worker PIN" minlength="4" maxlength="32" required>
-        <div class="hint">Use only the Roodie PIN provided by your administrator. Do not enter a Gmail password, OTP, or recovery code.</div>
+        <p id="requestText">Checking the Roodie code linked to this Gmail…</p>
         <div id="message" class="message" aria-live="polite"></div>
-        <div class="actions"><button id="submitButton" type="submit">Send PIN for approval</button></div>
-      </form>
+        <div class="actions">
+          <button id="changeAccount2" class="secondary" type="button">Change account</button>
+          <button id="checkButton" type="button">Check approval</button>
+        </div>
+      </div>
 
       <div id="approvedStep" class="step">
         <h1>Access approved</h1>
-        <div class="approved">
-          Your Roodie worker PIN has been approved by the administrator. You now have access.
-        </div>
+        <div class="approved">Your Gmail and linked Roodie code were approved. You now have access.</div>
       </div>
     </section>
   </main>
@@ -71,19 +68,20 @@
   <script src="config.js"></script>
   <script>
     const googleStep=document.getElementById("googleStep");
-    const pinStep=document.getElementById("pinStep");
+    const requestStep=document.getElementById("requestStep");
     const approvedStep=document.getElementById("approvedStep");
     const googleButton=document.getElementById("googleButton");
     const googleMessage=document.getElementById("googleMessage");
     const verifiedEmail=document.getElementById("verifiedEmail");
     const changeAccount=document.getElementById("changeAccount");
-    const pinInput=document.getElementById("workerPin");
-    const form=document.getElementById("pinStep");
-    const submitButton=document.getElementById("submitButton");
+    const changeAccount2=document.getElementById("changeAccount2");
+    const checkButton=document.getElementById("checkButton");
+    const requestText=document.getElementById("requestText");
     const message=document.getElementById("message");
 
     let client=null;
     let currentSession=null;
+    let registering=false;
 
     function show(el,type,text){
       el.className="message"+(type?" "+type:"");
@@ -96,6 +94,7 @@
         googleButton.disabled=true;
         return false;
       }
+
       client=window.supabase.createClient(
         ROODIE_CONFIG.SUPABASE_URL,
         ROODIE_CONFIG.SUPABASE_ANON_KEY,
@@ -105,12 +104,75 @@
     }
 
     function showApproved(){
-      pinStep.classList.remove("active");
       googleStep.classList.remove("active");
+      requestStep.classList.remove("active");
       approvedStep.classList.add("active");
 
       if(window.ROODIE_CONFIG && ROODIE_CONFIG.APPROVED_REDIRECT_URL){
-        setTimeout(()=>{ window.location.href=ROODIE_CONFIG.APPROVED_REDIRECT_URL; },700);
+        setTimeout(()=>{window.location.href=ROODIE_CONFIG.APPROVED_REDIRECT_URL;},700);
+      }
+    }
+
+    function handleStatus(data){
+      const status=data && data.status ? data.status : "Unknown";
+
+      if(status==="Approved" && data.ok){
+        showApproved();
+        return;
+      }
+
+      if(status==="Pending"){
+        requestText.textContent="Your verified Gmail and its linked Roodie code have been sent to the administrator.";
+        show(message,"pending","Approval is pending. Tap Check approval after the administrator approves the request in Supabase.");
+        checkButton.disabled=false;
+        return;
+      }
+
+      if(status==="NoCode"){
+        requestText.textContent="This Gmail does not have a Roodie code linked to it yet.";
+        show(message,"error","Ask the administrator to link a Roodie code to this Gmail in Supabase.");
+        checkButton.disabled=true;
+        return;
+      }
+
+      if(status==="Rejected"){
+        show(message,"error","This access request was rejected by the administrator.");
+        checkButton.disabled=false;
+        return;
+      }
+
+      if(status==="Blocked"){
+        show(message,"error","This Gmail/code link is blocked. Contact the administrator.");
+        checkButton.disabled=false;
+        return;
+      }
+
+      if(status==="Unauthenticated"){
+        show(message,"error","Your Google session expired. Sign in again.");
+        checkButton.disabled=true;
+        return;
+      }
+
+      show(message,"error","Could not process the Roodie access request.");
+      checkButton.disabled=false;
+    }
+
+    async function registerSignedInAccount(){
+      if(!client || !currentSession || registering) return;
+      registering=true;
+      checkButton.disabled=true;
+      requestText.textContent="Matching this Gmail with its linked Roodie code…";
+      show(message,"","");
+
+      try{
+        const {data,error}=await client.rpc("register_roodie_google_signin");
+        if(error) throw error;
+        handleStatus(data);
+      }catch(_err){
+        show(message,"error","Could not send the access request. Please try again.");
+        checkButton.disabled=false;
+      }finally{
+        registering=false;
       }
     }
 
@@ -126,8 +188,9 @@
       verifiedEmail.textContent=email;
       googleStep.classList.remove("active");
       approvedStep.classList.remove("active");
-      pinStep.classList.add("active");
-      setTimeout(()=>pinInput.focus(),50);
+      requestStep.classList.add("active");
+
+      await registerSignedInAccount();
     }
 
     async function startGoogleSignIn(){
@@ -135,6 +198,7 @@
       googleButton.disabled=true;
       show(googleMessage,"","");
       const redirectTo=window.location.origin+window.location.pathname;
+
       const {error}=await client.auth.signInWithOAuth({
         provider:"google",
         options:{redirectTo}
@@ -146,80 +210,34 @@
       }
     }
 
-    googleButton.addEventListener("click",startGoogleSignIn);
-
-    changeAccount.addEventListener("click",async()=>{
+    async function useAnotherAccount(){
       if(client) await client.auth.signOut({scope:"local"});
       currentSession=null;
-      pinInput.value="";
-      pinStep.classList.remove("active");
+      requestStep.classList.remove("active");
       approvedStep.classList.remove("active");
       googleStep.classList.add("active");
       show(message,"","");
       show(googleMessage,"","");
       googleButton.disabled=false;
-      submitButton.textContent="Send PIN for approval";
-    });
+      checkButton.disabled=false;
+    }
 
-    form.addEventListener("submit",async(e)=>{
-      e.preventDefault();
-      show(message,"","");
+    googleButton.addEventListener("click",startGoogleSignIn);
+    changeAccount.addEventListener("click",useAnotherAccount);
+    changeAccount2.addEventListener("click",useAnotherAccount);
 
-      const pin=pinInput.value.trim();
-
-      if(!client || !currentSession){
-        show(message,"error","Please sign in with Google first.");
-        return;
-      }
-
-      if(pin.length<4 || pin.length>32){
-        show(message,"error","Enter a Roodie PIN between 4 and 32 characters.");
-        return;
-      }
-
-      submitButton.disabled=true;
-      submitButton.textContent="Checking…";
+    checkButton.addEventListener("click",async()=>{
+      if(!client || !currentSession) return;
+      checkButton.disabled=true;
+      show(message,"","Checking approval…");
 
       try{
-        const {data,error}=await client.rpc("submit_roodie_pin",{p_pin:pin});
+        const {data,error}=await client.rpc("check_roodie_google_signin");
         if(error) throw error;
-
-        const status=data && data.status ? data.status : "Unknown";
-
-        if(status==="Approved" && data.ok){
-          showApproved();
-          return;
-        }
-
-        if(status==="Pending"){
-          show(message,"pending","PIN sent to the administrator. Your request is pending approval. After the administrator approves it in Supabase, tap Check approval.");
-          submitButton.textContent="Check approval";
-          return;
-        }
-
-        if(status==="Rejected"){
-          show(message,"error","This Roodie access request was rejected. Contact the administrator.");
-          submitButton.textContent="Check approval";
-          return;
-        }
-
-        if(status==="Blocked"){
-          show(message,"error","This Roodie access request is blocked. Contact the administrator.");
-          submitButton.textContent="Check approval";
-          return;
-        }
-
-        if(status==="Unauthenticated"){
-          show(message,"error","Your Google session expired. Sign in again.");
-          return;
-        }
-
-        show(message,"error",(data && data.message) ? data.message : "Could not process this PIN. Please try again.");
-      }catch(err){
-        show(message,"error","Could not send or check the PIN. Please try again.");
-      }finally{
-        submitButton.disabled=false;
-        if(submitButton.textContent==="Checking…") submitButton.textContent="Send PIN for approval";
+        handleStatus(data);
+      }catch(_err){
+        show(message,"error","Could not check approval. Please try again.");
+        checkButton.disabled=false;
       }
     });
 
