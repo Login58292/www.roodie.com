@@ -1,60 +1,50 @@
 # Roodie Worker Access
 
-Roodie is a worker-access page that uses a **verified Google email address** plus a separate **Roodie-issued worker code**.
+Roodie now uses a two-stage worker access flow.
 
-## Worker flow
+1. The worker signs in with Google.
+2. Google/Supabase verifies the Google account and gives Roodie the verified email/session.
+3. The worker enters the separate Roodie worker PIN supplied by the administrator.
+4. The PIN request appears in Supabase as Pending.
+5. The administrator reviews the request in Supabase and changes its status to Approved, Rejected, or Blocked.
+6. The worker taps Check approval using the same Roodie PIN.
+7. If the request is Approved, the Roodie page shows Access approved.
 
-1. Worker opens the Roodie link.
-2. Worker taps **Continue with Google**.
-3. Google authenticates the worker and Supabase gives Roodie the verified email address.
-4. Roodie displays that verified email.
-5. Worker enters the Roodie access code issued by the company.
-6. Roodie checks the verified Google email + Roodie code against the approved worker roster.
+## Where to approve workers
 
-If a personalized invite link is used, the invite token must also belong to that same worker.
+Open the Roodie Supabase project and go to:
 
-Roodie does **not** request or store Gmail passwords, Google verification codes, backup codes, or 2-step-verification codes.
+Table Editor -> roodie_access_requests
 
-## Important browser limitation
+A new request contains:
 
-A normal website cannot silently inspect a phone and read whichever Gmail account is signed in. The first Google sign-in requires Google's own account-selection/consent flow. After that, Google/Supabase can keep a normal signed-in session on that browser, making later visits much faster.
+- worker_email — the Google-authenticated email.
+- submitted_pin — the Roodie PIN while the request is still Pending.
+- status — defaults to Pending.
+- requested_at — when the request was submitted.
+
+To allow the worker, change status from Pending to Approved.
+
+The database trigger then automatically removes the visible PIN and stores only a bcrypt hash. The administrator can see the Roodie PIN while reviewing the Pending request, but the plaintext PIN is not retained after the decision.
+
+## Shared Google account
+
+Multiple workers can use the same Google account if that is how the company operates. Give each worker a different Roodie PIN. The PIN becomes the worker-specific access identifier.
+
+If two workers use the same Google account and the same Roodie PIN, Roodie cannot distinguish them as separate workers.
+
+## Google password
+
+Roodie does not receive or store the Gmail/Google password, Google OTP, recovery code, or 2-step-verification code. Google handles those credentials directly.
 
 ## Supabase setup
 
-Use a separate Supabase project dedicated to Roodie.
+The live Roodie project is configured for this approval flow. For a fresh project:
 
-1. Run `supabase-setup.sql` in the Roodie project's SQL Editor.
-2. In Supabase Auth, enable the **Google** provider.
-3. Create a Google OAuth Web client and add the Supabase callback URL shown by the Google provider page.
-4. Add the deployed Roodie URL to the allowed Site URL / redirect URLs.
-5. Put only the Roodie project's public project URL and publishable/anon key in `config.js`.
-6. Never put the Google client secret, Supabase service-role key, worker codes, or private credentials in this public GitHub repository.
+1. Run supabase-setup.sql.
+2. Enable Google under Supabase Authentication providers.
+3. Configure the Google OAuth client and Supabase callback URL.
+4. Add the deployed GitHub Pages URL to the allowed redirect URLs.
+5. Keep only the public Supabase URL and publishable key in config.js.
 
-The SQL creates:
-
-- `roodie_workers` — approved worker roster
-- `roodie_worker_visits` — personalized-link records
-- `roodie_worker_logins` — worker verification results
-- `private.admin_add_roodie_worker(...)` — admin provisioning helper
-- `register_roodie_visit(...)` — authenticated invite-link logging
-- `register_roodie_worker(...)` — verifies the Google-session email + Roodie code
-
-## Provision a worker
-
-From the Supabase SQL Editor:
-
-```sql
-select private.admin_add_roodie_worker(
-  'worker1@gmail.com',
-  'ROODIE-CODE-001',
-  'A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1'
-);
-```
-
-Then give the worker a personalized link:
-
-```
-https://YOUR-ROODIE-SITE/?invite=A_LONG_RANDOM_UNIQUE_TOKEN_FOR_WORKER_1
-```
-
-The worker's Google account must use the same email that is present in the Roodie roster.
+Never put a Google client secret or Supabase service-role key in the public repository.
